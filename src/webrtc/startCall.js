@@ -1,16 +1,68 @@
-import {RTCPeerConnection} from 'react-native-webrtc';
+import {
+  RTCPeerConnection,
+  RTCSessionDescription,
+  RTCIceCandidate,
+} from 'react-native-webrtc';
 import {RTCIceConnectionState} from './constants.js';
-import io from 'socket.io-client';
 
-const url = 'https://23d8cdc41b8d.ngrok.io';
-const socket = io.connect(url, {transports: ['websocket']});
+let pcPeers = {};
 
-const join = (roomID, component, localStream, remoteStream) => {
+const exchange = async (data, socket) => {
+  let fromId = data.from;
+
+  let pc;
+  if (fromId in data.component.pcPeers) {
+    pc = data.component.pcPeers[fromId];
+  } else {
+    pc = startCall(
+      fromId,
+      false,
+      data.component,
+      data.component.localStream,
+      data.component.remoteStream,
+    );
+  }
+
+  if (data.sdp) {
+    let sdp = new RTCSessionDescription(data.sdp);
+
+    await pc.setRemoteDescription(sdp);
+
+    if (pc.remoteDescription.type === 'offer') {
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('exchange', {
+        to: fromId,
+        sdp: pc.localDescription,
+      });
+    }
+  } else {
+    pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+  }
+};
+
+// const leave = (socketId) => {
+//   const pc = pcPeers[socketId];
+//   pc.close();
+
+//   delete pcPeers[socketId];
+
+//   const remoteList = compenent.state.remoteList;
+
+//   delete remoteList[socketId];
+
+//   compenent.setState({
+//     info: 'One peer left!',
+//     remoteList: remoteList,
+//   });
+// };
+
+const join = (roomID, component, localStream, remoteStream, socket) => {
   socket.emit('join', roomID, (socketIds) => {
     for (const i in socketIds) {
       if (socketIds.hasOwnProperty(i)) {
         const socketId = socketIds[i];
-        startCall(socketId, true, component, localStream, remoteStream);
+        startCall(socketId, true, component, localStream, remoteStream, socket);
       }
     }
   });
@@ -22,111 +74,124 @@ const startCall = async (
   component,
   localStream,
   remoteStream,
+  socket,
 ) => {
   // const configuration = {iceServers: [{url: 'stun:stun.l.google.com:19302'}]};
   const configuration = {
     iceServers: [{urls: 'stun:stun.l.google.com:19302'}],
   };
-  const localPC = new RTCPeerConnection(configuration);
-  const remotePC = new RTCPeerConnection(configuration);
+  const pc = new RTCPeerConnection(configuration);
+
+  component.setState((prevState) => {
+    return {
+      ...prevState,
+      pcPeers: {
+        ...prevState.pcPeers,
+        [socketId]: pc,
+      },
+    };
+  });
+
+  pcPeers = {
+    ...pcPeers,
+    [socketId]: pc,
+  };
 
   /**
    * On Negotiation Needed
    */
-  // localPC.onnegotiationneeded = async () => {
-  //   if (isOffer) {
-  //     try {
-  //       const offer = await localPC.createOffer();
-  //       await localPC.setLocalDescription(offer);
-  //       socket.emit('exchange', {to: socketId, sdp: peer.localDescription});
-  //     } catch (error) {
-  //       console.log(error);
-  //     }
-  //   }
-  // };
-
-  /**
-   * On Ice Candidate
-   */
-  localPC.onicecandidate = (e) => {
-    try {
-      if (e.candidate) {
-        // socket.emit('exchange', {to: socketId, candidate: e.candidate});
-        remotePC.addIceCandidate(e.candidate);
-      } else {
-        console.log('local: All ICE candidates have been sent');
+  pc.onnegotiationneeded = async () => {
+    if (isOffer) {
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('exchange', {
+          to: socketId,
+          sdp: pc.localDescription,
+          component: component,
+        });
+      } catch (error) {
+        console.log(error);
       }
-    } catch (err) {
-      console.error(`Error adding remotePC iceCandidate: ${err}`);
     }
   };
 
   /**
    * On Ice Candidate
    */
-  remotePC.onicecandidate = (e) => {
+  pc.onicecandidate = (e) => {
     try {
       if (e.candidate) {
-        // socket.emit('exchange', {to: socketId, candidate: e.candidate});
-        localPC.addIceCandidate(e.candidate);
+        socket.emit('exchange', {
+          to: socketId,
+          candidate: e.candidate,
+          component: component,
+        });
       } else {
-        console.log('remote: All ICE candidates have been sent');
+        console.log('All ICE candidates have been sent');
       }
-    } catch (err) {
-      console.error(`Error adding localPC iceCandidate: ${err}`);
+    } catch (error) {
+      console.error(`Error adding remotePC iceCandidate: ${error}`);
     }
   };
 
   /**
    * On Add Stream (Deprecated)
    */
-  remotePC.onaddstream = (e) => {
+  pc.onaddstream = (e) => {
     if (e.stream && remoteStream !== e.stream) {
-      component.setState({remoteStream: e.stream});
+      const remoteList = component.state.remoteList;
+
+      remoteList[socketId] = e.stream;
+      component.setState({
+        info: 'One peer join!',
+        remoteList: remoteList,
+        remoteStream: e.stream,
+      });
     }
   };
 
   /**
    * Add Stream (Deprecated)
    */
-  localPC.addStream(localStream);
+  pc.addStream(localStream);
 
   /**
    * On Ice Connection State Change
    */
-  // localPC.oniceconnectionstatechange = (event) => {
-  //   if (event.target.iceConnectionState === RTCIceConnectionState.CONNECTED) {
-  //     console.log('event.target.iceConnectionState === connected');
-  //   }
-  //   if (event.target.iceConnectionState === RTCIceConnectionState.COMPLETED) {
-  //     console.log('event.target.iceConnectionState === completed');
-  //   }
-  //   if (
-  //     event.target.iceConnectionState === RTCIceConnectionState.FAILED ||
-  //     event.target.iceConnectionState === RTCIceConnectionState.DISCONNECTED ||
-  //     event.target.iceConnectionState === RTCIceConnectionState.CLOSED
-  //   ) {
-  //     console.log('RTCIceConnectionState error');
-  //   }
-  // };
+  pc.oniceconnectionstatechange = (event) => {
+    if (event.target.iceConnectionState === RTCIceConnectionState.CONNECTED) {
+      console.log('event.target.iceConnectionState === connected');
+    }
+    if (event.target.iceConnectionState === RTCIceConnectionState.COMPLETED) {
+      console.log('event.target.iceConnectionState === completed');
+    }
+    if (
+      event.target.iceConnectionState === RTCIceConnectionState.FAILED ||
+      event.target.iceConnectionState === RTCIceConnectionState.DISCONNECTED ||
+      event.target.iceConnectionState === RTCIceConnectionState.CLOSED
+    ) {
+      console.log('RTCIceConnectionState error');
+    }
+  };
 
-  try {
-    const offer = await localPC.createOffer();
+  /**
+   * On Signaling State Change
+   */
+  pc.onsignalingstatechange = (e) => {
+    console.log('on signaling state change', e.target.signalingState);
+  };
 
-    await localPC.setLocalDescription(offer);
+  /**
+   * On Remove Stream
+   */
+  pc.onremovestream = (e) => {
+    console.log('on remove stream', e.stream);
+  };
 
-    await remotePC.setRemoteDescription(localPC.localDescription);
+  component.setState({cachedPC: pc});
 
-    const answer = await remotePC.createAnswer();
-
-    await remotePC.setLocalDescription(answer);
-
-    await localPC.setRemoteDescription(remotePC.localDescription);
-  } catch (err) {
-    console.error(err);
-  }
-  component.setState({cachedLocalPC: localPC});
-  component.setState({cachedRemotePC: remotePC});
+  return pc;
 };
 
-export {startCall, join};
+export {startCall, join, exchange};

@@ -1,17 +1,32 @@
 import React from 'react';
 import {SafeAreaView, StyleSheet, Button, View} from 'react-native';
 import {RTCView} from 'react-native-webrtc';
+import io from 'socket.io-client';
 import {
   closeStreams,
   mapHash,
   join,
-  startCall,
+  exchange,
   startLocalStream,
   stopStreams,
   switchCamera,
   toggleCamera,
   toggleMute,
 } from './webrtc/index.js';
+
+const url = 'https://23d8cdc41b8d.ngrok.io';
+const socket = io.connect(url, {transports: ['websocket']});
+
+socket.on('connect', () => {
+  console.log('connect');
+});
+socket.on('exchange', (data) => {
+  exchange(data, socket);
+});
+socket.on('leave', (socketId) => {
+  console.log(socketId);
+  // leave(socketId);
+});
 
 class App extends React.Component {
   constructor(props) {
@@ -26,6 +41,7 @@ class App extends React.Component {
       remoteList: {},
       roomID: '1234',
       pcPeers: {},
+      info: 'Initializing',
     };
   }
 
@@ -67,7 +83,9 @@ class App extends React.Component {
           />
           <Button
             title="start call"
-            onPress={() => join(roomID, this, localStream, remoteStream)}
+            onPress={() => {
+              join(roomID, this, localStream, remoteStream, socket);
+            }}
             disabled={!localStream}
           />
           <Button
