@@ -4,10 +4,24 @@ import {
   RTCIceCandidate,
 } from 'react-native-webrtc';
 import {RTCIceConnectionState} from './constants.js';
+import io from 'socket.io-client';
 
+const url = 'https://23d8cdc41b8d.ngrok.io';
+const socket = io.connect(url, {transports: ['websocket']});
 let pcPeers = {};
 
-const exchange = async (data, socket) => {
+socket.on('connect', () => {
+  console.log('connect');
+});
+socket.on('exchange', (data) => {
+  exchange(data);
+});
+socket.on('leave', (socketId) => {
+  console.log(socketId);
+  // leave(socketId);
+});
+
+const exchange = async (data) => {
   let fromId = data.from;
 
   let pc;
@@ -57,12 +71,15 @@ const exchange = async (data, socket) => {
 //   });
 // };
 
-const join = (roomID, component, localStream, remoteStream, socket) => {
+const join = (roomID, component, localStream, remoteStream) => {
+  console.log('1');
   socket.emit('join', roomID, (socketIds) => {
+    console.log('2');
+    console.log(socketIds);
     for (const i in socketIds) {
       if (socketIds.hasOwnProperty(i)) {
         const socketId = socketIds[i];
-        startCall(socketId, true, component, localStream, remoteStream, socket);
+        startCall(socketId, true, component, localStream, remoteStream);
       }
     }
   });
@@ -74,7 +91,6 @@ const startCall = async (
   component,
   localStream,
   remoteStream,
-  socket,
 ) => {
   // const configuration = {iceServers: [{url: 'stun:stun.l.google.com:19302'}]};
   const configuration = {
@@ -102,6 +118,11 @@ const startCall = async (
    */
   pc.onnegotiationneeded = async () => {
     if (isOffer) {
+      socket.emit('exchange', {
+        to: socketId,
+        sdp: pc.localDescription,
+        component: component,
+      });
       try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -121,6 +142,7 @@ const startCall = async (
    */
   pc.onicecandidate = (e) => {
     try {
+      console.log(e.candidate);
       if (e.candidate) {
         socket.emit('exchange', {
           to: socketId,
@@ -194,4 +216,4 @@ const startCall = async (
   return pc;
 };
 
-export {startCall, join, exchange};
+export {startCall, join};
