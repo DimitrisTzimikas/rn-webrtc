@@ -216,4 +216,4 @@ const startCall = async (
   return pc;
 };
 
-export {startCall, join};
+export {join};
